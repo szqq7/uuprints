@@ -12,7 +12,7 @@ export interface BlogSiteIdentitySettings {
 	favicon?: MediaReference;
 }
 
-const DEFAULT_SITE_TITLE = "My Blog";
+const DEFAULT_SITE_TITLE = "vbags";
 const DEFAULT_SITE_TAGLINE = "Thoughts, stories, and ideas.";
 
 export function resolveBlogSiteIdentity(settings?: BlogSiteIdentitySettings) {

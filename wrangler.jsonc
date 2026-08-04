@@ -1,29 +1,28 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "uuprints",
-  "main": "./src/worker.ts",
-  "compatibility_date": "2026-02-24",
-  "compatibility_flags": ["nodejs_compat"],
-  "d1_databases": [
-    {
-      "binding": "DB",
-      "database_name": "uuprints",
-      "database_id": "c8ae885a-c51b-4ac3-bb40-933b064edf7f"
-    }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "MEDIA",
-      "bucket_name": "uuprints-media",
-      "preview_bucket_name": "uuprints-media"
-    }
-  ],
-  "worker_loaders": [
-    {
-      "binding": "LOADER"
-    }
-  ],
-  "triggers": {
-    "crons": ["* * * * *"]
-  }
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "uuprints",
+	"main": "./src/worker.ts",
+	"compatibility_date": "2026-02-24",
+	"compatibility_flags": ["nodejs_compat"],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			// ★ uuprints 独立库:先 wrangler d1 create uuprints-db,填入返回的 ID
+			"database_name": "uuprints-db","database_id": "REPLACE_WITH_UUPRINTS_DB_ID",
+		},
+	],
+	"r2_buckets": [
+		{
+			"binding": "MEDIA",
+			"bucket_name": "my-emdash-media","preview_bucket_name": "my-emdash-media",
+		},
+	],
+	"worker_loaders": [
+		{
+			"binding": "LOADER",
+		},
+	],
+	"triggers": {
+		"crons": ["* * * * *"],
+	},
 }
