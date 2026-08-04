@@ -7,22 +7,23 @@
 	"d1_databases": [
 		{
 			"binding": "DB",
-			// ★ uuprints 独立库:先 wrangler d1 create uuprints-db,填入返回的 ID
-			"database_name": "uuprints-db","database_id": "REPLACE_WITH_UUPRINTS_DB_ID",
-		},
+			"database_name": "uuprints-db",
+			"database_id": "4a4ea6de-7bfb-406c-9f9b-fce58e59e001"
+		}
 	],
 	"r2_buckets": [
 		{
 			"binding": "MEDIA",
-			"bucket_name": "my-emdash-media","preview_bucket_name": "my-emdash-media",
-		},
+			"bucket_name": "my-emdash-media",
+			"preview_bucket_name": "my-emdash-media"
+		}
 	],
 	"worker_loaders": [
 		{
-			"binding": "LOADER",
-		},
+			"binding": "LOADER"
+		}
 	],
 	"triggers": {
-		"crons": ["* * * * *"],
-	},
+		"crons": ["* * * * *"]
+	}
 }
