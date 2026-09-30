@@ -11,6 +11,13 @@
 			"database_id": "4a4ea6de-7bfb-406c-9f9b-fce58e59e001"
 		}
 	],
+	"kv_namespaces": [
+		{
+			// EmDash 1.0.1 分布式对象缓存（替代 1.0.1 中已移除的 cloudflareCache）
+			"binding": "CACHE_KV",
+			"id": "9be5a7a999b64e97968b2a804f477ca1"
+		},
+	],
 	"r2_buckets": [
 		{
 			"binding": "MEDIA",
