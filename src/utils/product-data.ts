@@ -1,4 +1,4 @@
-import productsData from "../data/products.json";
+import { getEmDashCollection } from "emdash";
 import imprintColorsData from "../data/imprint-colors.json";
 
 // ===== 类型定义 =====
@@ -79,12 +79,6 @@ function safeArr<T>(v: T[] | undefined | null): T[] {
 function safeStr(v: any, fallback: string): string {
   if (v === null || v === undefined) return fallback;
   return String(v);
-}
-
-export function getAllProducts(): ProductData[] {
-  const data = productsData as any;
-  if (!data || !data.products) return [];
-  return data.products.map((p: any) => normalizeProduct(p));
 }
 
 /**
@@ -317,12 +311,238 @@ function normalizeProduct(raw: any): ProductData {
   return result as ProductData;
 }
 
-export function loadProduct(code: string): ProductData | null {
-  const list = getAllProducts();
-  for (let i = 0; i < list.length; i++) {
-    if (list[i].code === code) return list[i];
+// =====================================================================
+// EmDash(D1) 数据源
+// ---------------------------------------------------------------------
+// 线上 products 字段分工(2026-10-16 确认):
+//   big_json     = 除图片以外的全部信息(定价在 specs 下)
+//   picture_json = 全部图片 [{url}]
+//   title / spu / colors / description / keywords = 搜索字段
+// 目前 big_json 不含 surfaces / files / knifeFiles / imgMain /
+// surfaceImages / proofingFee / blankScale —— 前台暂不使用,后续补齐。
+// =====================================================================
+
+/** 宽松解析:接受 JSON 字符串或已解析对象;失败返回 null */
+function safeParse(raw: any): any {
+  if (raw === null || raw === undefined || raw === "") return null;
+  if (typeof raw === "object") return raw;
+  if (typeof raw !== "string") return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
   }
-  return null;
+}
+
+/**
+ * 解析 picture_json,兼容线上实际存在的三种形态:
+ *   1) { main: [{index,caption,url,hasLogo}], colors: [{index,caption,url}] }  ← 当前线上格式
+ *   2) [{ url }] / ["url"]                                                     ← 旧格式
+ *   3) { "任意键": "url" } / { "任意键": [{url}] }                             ← 兜底
+ * main 按 index 升序;colors 保留 caption 作为颜色名。
+ */
+function extractPictures(raw: any): { main: string[]; colors: { name: string; url: string }[] } {
+  const main: string[] = [];
+  const colors: { name: string; url: string }[] = [];
+  const pics = safeParse(raw);
+  const addMain = (u: any): void => {
+    const s = typeof u === "string" ? u : u?.url || "";
+    if (s && main.indexOf(s) === -1) main.push(s);
+  };
+  if (!pics) return { main, colors };
+
+  // 形态 2:数组
+  if (Array.isArray(pics)) {
+    pics.forEach(addMain);
+    return { main, colors };
+  }
+  if (typeof pics !== "object") return { main, colors };
+
+  const toArr = (v: any): any[] => (Array.isArray(v) ? v : []);
+
+  // 形态 1:main 按 index 升序(缺 index 时保持原序)
+  toArr(pics.main)
+    .map((p: any, i: number) => ({ p, k: typeof p?.index === "number" ? p.index : i }))
+    .sort((a: any, b: any) => a.k - b.k)
+    .forEach((x: any) => addMain(x.p));
+
+  toArr(pics.colors).forEach((p: any) => {
+    const url = typeof p === "string" ? p : p?.url || "";
+    if (!url) return;
+    const name = typeof p === "object" ? String(p?.caption || p?.name || "") : "";
+    colors.push({ name, url });
+  });
+
+  // 形态 3:既无 main 也无 colors 时的兜底
+  if (main.length === 0 && colors.length === 0) {
+    Object.keys(pics).forEach((k) => {
+      const v = (pics as any)[k];
+      if (typeof v === "string") addMain(v);
+      else toArr(v).forEach(addMain);
+    });
+  }
+  return { main, colors };
+}
+
+/** 颜色名:兼容 "Blue,Natural,Red" 字符串、["Blue"]、[{name:"Blue"}] */
+function parseColorNames(raw: any): string[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((c) => (typeof c === "string" ? c : c?.name || ""))
+      .map((s) => String(s).trim())
+      .filter(Boolean);
+  }
+  if (typeof raw === "string") {
+    return raw.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+/**
+ * 把 EmDash 的 products entry 还原成 normalizeProduct() 需要的 raw 形态。
+ * 字段可能来自 entry.data 或 entry 本身(两者都兜一下)。
+ */
+function entryToRaw(entry: any): any {
+  const d = entry?.data ?? entry ?? {};
+  const bigJson = safeParse(d.big_json) || {};
+  const { main: mainPics, colors: colorPics } = extractPictures(d.picture_json);
+
+  // surface 图 = 主图 + 未重复的颜色图
+  const allPics: string[] = mainPics.slice();
+  for (const c of colorPics) {
+    if (c.url && allPics.indexOf(c.url) === -1) allPics.push(c.url);
+  }
+
+  // 颜色名优先取 colors 列(搜索字段),其次 big_json.colors,最后用 picture_json.colors 的 caption;
+  // 每个颜色按名称匹配 picture_json.colors,带上对应产品图(点色块可切图)
+  const fromCol = parseColorNames(d.colors);
+  const fromBig = parseColorNames(bigJson.colors);
+  const names = fromCol.length ? fromCol : fromBig.length ? fromBig : colorPics.map((c) => c.name).filter(Boolean);
+  const norm = (s: string): string => s.toLowerCase().replace(/[\s_\-]+/g, "");
+  const colorList = names.map((name) => {
+    const hit = colorPics.find((c) => c.name && norm(c.name) === norm(name));
+    return { name, imageUrl: hit ? hit.url : "" };
+  });
+
+  return {
+    ...bigJson,
+    // 系统字段覆盖 big_json 里的同名键(线上是权威值)
+    SPU: d.spu || bigJson.SPU || entry?.slug || "",
+    title: d.title || bigJson.title || "",
+    colors: colorList,
+    // 图片:main 第一张作主图(main 缺失时退到颜色图),全部作为 surface 图
+    imgMain: mainPics[0] || colorPics[0]?.url || "",
+    surfaceImages: allPics.map((u, i) => ({ position: `Surface ${i + 1}`, url: u })),
+    // 以下前台暂不包含(经确认,后续会并入 big_json)
+    files: [],
+    knifeFiles: [],
+    surfaces: [],
+  };
+}
+
+/**
+ * 从 EmDash(D1) 读取单个产品并归一化。
+ * code 既可以传 SPU(如 VF160),也可以传 entry slug(如 12-oz-canvas-tote-bag-2):
+ * 先按 `spu` 精确匹配,未命中再按 `slug` 匹配 —— 后者用于兼容站内搜索
+ * (emdash LiveSearch 默认生成 /products/<slug>)与短链访问。
+ * - 命中 → 返回 ProductData
+ * - 两者都未命中 / 出错 → 返回 null
+ */
+export async function loadProductFromDB(code: string): Promise<ProductData | null> {
+  if (!code) return null;
+  try {
+    // 1) 主编码:SPU
+    const bySpu = await getEmDashCollection("products", {
+      status: "published",
+      where: { spu: code },
+      limit: 1,
+    });
+    let list = (bySpu.entries as any[]) || [];
+    // 2) 回落到 slug
+    if (!list.length) {
+      const bySlug = await getEmDashCollection("products", {
+        status: "published",
+        where: { slug: code },
+        limit: 1,
+      });
+      list = (bySlug.entries as any[]) || [];
+    }
+    if (!list.length) return null;
+    return normalizeProduct(entryToRaw(list[0]));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 前台产品页唯一入口。
+ * 当前只读 EmDash(D1) 的 products collection —— 静态 JSON 自 2026-10-16 起不再参与读取
+ * (src/data/products.json 文件保留,但已无任何 import)。
+ */
+export async function resolveProduct(code: string): Promise<ProductData | null> {
+  return loadProductFromDB(code);
+}
+
+// =====================================================================
+// 产品列表(/products 的列表态,可按分类过滤)
+// =====================================================================
+
+/** 产品分类法名 —— 与 MegaMenu 的 getTaxonomyTerms("products1") 用的是同一个 */
+export const PRODUCT_TAXONOMY = "products1";
+
+/** 列表卡片所需的最小字段集 */
+export interface ProductListItem {
+  id: string;
+  /** 详情页编码(优先 SPU) */
+  code: string;
+  title: string;
+  description: string;
+  image: string;
+  /** 详情页链接 */
+  link: string;
+}
+
+/** entry → 列表卡片项;缺 SPU 也缺 slug 的条目返回 null(由调用方过滤掉) */
+function toListItem(entry: any): ProductListItem | null {
+  const d = entry?.data ?? entry ?? {};
+  const bigJson = safeParse(d.big_json) || {};
+  const { main: mainPics, colors: colorPics } = extractPictures(d.picture_json);
+  const code = d.spu || bigJson.SPU || entry?.slug || "";
+  if (!code) return null;
+  return {
+    id: String(entry?.id ?? code),
+    code: String(code),
+    title: String(d.title || bigJson.title || code),
+    description: String(d.description || ""),
+    image: mainPics[0] || colorPics[0]?.url || "",
+    link: "/products?code=" + encodeURIComponent(String(code)),
+  };
+}
+
+/**
+ * 列出可展示的产品。
+ * - 不传 category → 全部 published 产品
+ * - 传 category    → 该分类(products1)下的 published 产品
+ *
+ * EmDash 的 where 支持以「分类法名」为键做 term 过滤(其 EntryFilter 文档写明
+ * `{ category: 'news' }` 即按分类法过滤),官方 getEntriesByTerm 就是这么实现的;
+ * 这里额外显式带上 status:"published" 以排除草稿。
+ */
+export async function listProducts(
+  opts: { category?: string; limit?: number } = {},
+): Promise<ProductListItem[]> {
+  const category = (opts.category || "").trim();
+  try {
+    const { entries } = await getEmDashCollection("products", {
+      status: "published",
+      limit: opts.limit && opts.limit > 0 ? opts.limit : 200,
+      ...(category ? { where: { [PRODUCT_TAXONOMY]: category } } : {}),
+    });
+    const rows = (entries as any[]) || [];
+    return rows.map(toListItem).filter((x): x is ProductListItem => x !== null);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -509,6 +729,9 @@ export function getAllImages(p: ProductData): string[] {
     if (out.indexOf(u) === -1) out.push(u);
   }
   push(p.imgMainUrl);
+  // normalizeProduct 已经把 picture_json 的全部图片摊到 images(main + colors)
+  const gallery = safeArr((p as any).images);
+  for (let i = 0; i < gallery.length; i++) push(gallery[i]);
   const specs = safeArr(p.productSpecs);
   for (let i = 0; i < specs.length; i++) push(specs[i].imageUrl);
   const files = safeArr(p.files);
